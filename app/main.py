@@ -34,7 +34,7 @@ app.add_middleware(
 # Constants
 # ---------------------------------------------------------------------------
 
-MODEL_PATH       = os.getenv("MODEL_PATH", "model/deepfake_detector.h5")
+MODEL_PATH = os.getenv("MODEL_PATH", "model/deepfake_detector.keras")
 CLASS_INDEX_PATH = os.getenv("CLASS_INDEX_PATH", "model/class_indices.json")
 
 MAX_IMAGE_MB = 20
