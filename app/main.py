@@ -1,19 +1,16 @@
-<<<<<<< HEAD
 import io
 import os
+import json
 import tempfile
 import time
 
 import cv2
 import numpy as np
-import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
-from torchvision import transforms
-
-from app.model import load_model
-from app.video_utils import sample_frames
+import tensorflow as tf
+from tensorflow.keras.models import load_model
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -22,10 +19,9 @@ from app.video_utils import sample_frames
 app = FastAPI(
     title="AI Image & Video Detector",
     description="Detect AI-generated / deepfake images and videos.",
-    version="2.0.0",
+    version="3.0.0",
 )
 
-# Allow Flutter (and any other) client to call this API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,49 +34,61 @@ app.add_middleware(
 # Constants
 # ---------------------------------------------------------------------------
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_PATH = os.getenv("MODEL_PATH", "model/deepfake_model.pt")
-MODEL_TYPE = os.getenv("MODEL_TYPE", "efficientnet")   # "simple" | "efficientnet"
+MODEL_PATH       = os.getenv("MODEL_PATH", "model/deepfake_detector.h5")
+CLASS_INDEX_PATH = os.getenv("CLASS_INDEX_PATH", "model/class_indices.json")
 
-# Max upload sizes
 MAX_IMAGE_MB = 20
 MAX_VIDEO_MB = 200
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/bmp"}
 ALLOWED_VIDEO_TYPES = {"video/mp4", "video/x-msvideo", "video/mpeg", "video/quicktime", "video/webm"}
 
-IDX_TO_LABEL = {0: "FAKE", 1: "REAL"}
-
 # ---------------------------------------------------------------------------
-# Model + transform (loaded once at startup)
+# Load model + class indices at startup
 # ---------------------------------------------------------------------------
 
-model = load_model(MODEL_PATH, DEVICE, model_type=MODEL_TYPE)
+print(f"Loading model from {MODEL_PATH} ...")
+model = load_model(MODEL_PATH)
+print("Model loaded!")
 
-# All images are resized to 224x224 — MUST match training
-tfm = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225]),
-])
+with open(CLASS_INDEX_PATH) as f:
+    class_indices = json.load(f)
+
+# Invert: {"FAKE": 0, "REAL": 1} → {0: "FAKE", 1: "REAL"}
+idx_to_label = {v: k.upper() for k, v in class_indices.items()}
+print("Class mapping:", idx_to_label)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _predict_pil(pil_img: Image.Image) -> dict:
-    """Run inference on a single PIL image and return a result dict."""
-    tensor = tfm(pil_img).unsqueeze(0).to(DEVICE)
-    with torch.no_grad():
-        outputs = model(tensor)
-        probs = torch.softmax(outputs, dim=1)
-        pred = torch.argmax(probs, dim=1).item()
-        confidence = probs[0][pred].item()
+def preprocess_image(pil_img: Image.Image) -> np.ndarray:
+    """Resize, convert to array, and rescale to [0, 1] — matches training."""
+    img = pil_img.convert("RGB").resize((224, 224))
+    arr = np.array(img, dtype=np.float32)
+    arr = arr / 255.0                   # matches rescale=1./255 used in training
+    arr = np.expand_dims(arr, axis=0)
+    return arr
+
+
+def predict_pil(pil_img: Image.Image) -> dict:
+    arr = preprocess_image(pil_img)
+    prob = float(model.predict(arr, verbose=0)[0][0])
+
+    predicted_idx = 1 if prob > 0.51 else 0   # ← changed 0.5 to 0.51
+    label = idx_to_label[predicted_idx]
+    confidence = prob if predicted_idx == 1 else 1.0 - prob
+
+    # If confidence below 51%, force FAKE
+    if confidence * 100 < 51:
+        label = "FAKE"
+        predicted_idx = 0
+
     return {
-        "prediction": int(pred),
-        "label": IDX_TO_LABEL[pred],
+        "prediction": predicted_idx,
+        "label": label,
         "confidence": round(confidence * 100, 2),
+        "raw_score": round(prob, 4),
     }
 
 # ---------------------------------------------------------------------------
@@ -89,24 +97,22 @@ def _predict_pil(pil_img: Image.Image) -> dict:
 
 @app.get("/")
 def home():
-    return {"message": "AI Image & Video Detector API is running"}
+    return {"message": "AI Image & Video Detector API is running", "version": "3.0.0"}
 
 
 @app.get("/health")
 def health():
     return {
         "status": "ok",
-        "device": DEVICE,
         "model_path": MODEL_PATH,
-        "model_type": MODEL_TYPE,
-        "cuda_available": torch.cuda.is_available(),
+        "class_mapping": idx_to_label,
+        "gpu_available": len(tf.config.list_physical_devices('GPU')) > 0,
     }
 
 
 @app.post("/predict/image")
 async def predict_image(file: UploadFile = File(...)):
     """Predict whether a single image is AI-generated / deepfake."""
-    # File-type guard
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(
             status_code=415,
@@ -115,22 +121,20 @@ async def predict_image(file: UploadFile = File(...)):
 
     contents = await file.read()
 
-    # Size guard
     if len(contents) > MAX_IMAGE_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_IMAGE_MB} MB.")
 
-    np_arr = np.frombuffer(contents, np.uint8)
-    img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    if img_bgr is None:
+    try:
+        pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception:
         raise HTTPException(status_code=400, detail="Could not decode image. File may be corrupt.")
 
-    pil_img = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
-    result = _predict_pil(pil_img)
+    result = predict_pil(pil_img)
     result["filename"] = file.filename
     return result
 
 
-# Keep the old /predict route as an alias so existing clients don't break
+# Legacy alias so existing clients don't break
 @app.post("/predict")
 async def predict_legacy(file: UploadFile = File(...)):
     return await predict_image(file)
@@ -144,9 +148,8 @@ async def predict_video(
 ):
     """
     Predict whether a video is AI-generated / deepfake.
-
-    Samples up to `max_frames` frames (1 every `frames_every_n` frames),
-    runs per-frame inference, and returns an aggregated verdict.
+    Samples up to max_frames frames, runs per-frame inference,
+    and returns an aggregated majority-vote verdict.
     """
     if file.content_type not in ALLOWED_VIDEO_TYPES:
         raise HTTPException(
@@ -159,7 +162,6 @@ async def predict_video(
     if len(contents) > MAX_VIDEO_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_VIDEO_MB} MB.")
 
-    # Write to a temp file so OpenCV can open it by path
     suffix = os.path.splitext(file.filename or ".mp4")[1] or ".mp4"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(contents)
@@ -167,11 +169,23 @@ async def predict_video(
 
     try:
         t0 = time.time()
-        frames_bgr = sample_frames(tmp_path, every_n=frames_every_n, max_frames=max_frames)
+        cap = cv2.VideoCapture(tmp_path)
+        frames = []
+        frame_idx = 0
+
+        while len(frames) < max_frames:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_idx % frames_every_n == 0:
+                frames.append(frame)
+            frame_idx += 1
+
+        cap.release()
     finally:
         os.unlink(tmp_path)
 
-    if not frames_bgr:
+    if not frames:
         raise HTTPException(status_code=400, detail="Could not extract frames from video.")
 
     # Per-frame predictions
@@ -179,9 +193,9 @@ async def predict_video(
     fake_confidences = []
     real_confidences = []
 
-    for i, frame in enumerate(frames_bgr):
-        pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        r = _predict_pil(pil_img)
+    for i, frame_bgr in enumerate(frames):
+        pil_img = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        r = predict_pil(pil_img)
         frame_results.append({"frame_index": i, **r})
         fake_confidences.append(r["confidence"] if r["label"] == "FAKE" else 100 - r["confidence"])
         real_confidences.append(r["confidence"] if r["label"] == "REAL" else 100 - r["confidence"])
@@ -190,8 +204,6 @@ async def predict_video(
     fake_votes = sum(1 for r in frame_results if r["label"] == "FAKE")
     real_votes = len(frame_results) - fake_votes
     verdict = "FAKE" if fake_votes >= real_votes else "REAL"
-    avg_fake_conf = round(sum(fake_confidences) / len(fake_confidences), 2)
-    avg_real_conf = round(sum(real_confidences) / len(real_confidences), 2)
 
     return {
         "filename": file.filename,
@@ -199,73 +211,8 @@ async def predict_video(
         "fake_votes": fake_votes,
         "real_votes": real_votes,
         "frames_analyzed": len(frame_results),
-        "avg_fake_confidence": avg_fake_conf,
-        "avg_real_confidence": avg_real_conf,
+        "avg_fake_confidence": round(sum(fake_confidences) / len(fake_confidences), 2),
+        "avg_real_confidence": round(sum(real_confidences) / len(real_confidences), 2),
         "processing_seconds": round(time.time() - t0, 2),
         "frame_details": frame_results,
-=======
-from fastapi import FastAPI, UploadFile, File
-import torch
-from torchvision import transforms
-from PIL import Image
-import numpy as np
-import cv2
-
-from app.model import load_model
-
-app = FastAPI()
-
-@app.get("/")
-def home():
-    return {"message": "Deepfake API is running 🚀"}
-
-
-# Device
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-# Load trained model
-MODEL_PATH = "model/deepfake_model.pt"
-model = load_model(MODEL_PATH, device)
-
-# MUST match training transform
-tfm = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
-])
-
-# VERY IMPORTANT
-idx_to_label = {
-    0: "FAKE",
-    1: "REAL"
-}
-
-
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-    contents = await file.read()
-
-    np_arr = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-    if img is None:
-        return {"error": "Invalid image file"}
-
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = tfm(Image.fromarray(img)).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        outputs = model(img)
-        probs = torch.softmax(outputs, dim=1)
-        pred = torch.argmax(probs, dim=1).item()
-        confidence = probs[0][pred].item()
-
-    return {
-        "prediction": int(pred),
-        "label": idx_to_label[pred],
-        "confidence": round(confidence * 100, 2)
->>>>>>> 235e3198f64890e0d6774895a66c2548e93abacd
     }

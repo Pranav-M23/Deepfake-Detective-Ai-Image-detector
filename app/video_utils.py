@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 """Utilities for extracting and preprocessing video frames."""
 
 from __future__ import annotations
@@ -92,22 +91,3 @@ def sample_frames(
 def resize_frame(frame: np.ndarray, size: int = 224) -> np.ndarray:
     """Resize a BGR frame to (size × size)."""
     return cv2.resize(frame, (size, size), interpolation=cv2.INTER_AREA)
-=======
-import cv2
-
-def sample_frames(video_path: str, every_n: int = 30, max_frames: int = 10):
-    cap = cv2.VideoCapture(video_path)
-    frames = []
-    i = 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if i % every_n == 0:
-            frames.append(frame)
-            if len(frames) >= max_frames:
-                break
-        i += 1
-    cap.release()
-    return frames
->>>>>>> 235e3198f64890e0d6774895a66c2548e93abacd

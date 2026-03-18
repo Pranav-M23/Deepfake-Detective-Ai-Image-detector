@@ -1,17 +1,58 @@
-# Python
+# --- Large Files & Datasets (CRITICAL) ---
+dataset.zip
+*.zip
+*.tar.gz
+*.7z
+# Ignore the dataset folder and model weights
+dataset/
+model/
+*.pt
+*.bin
+*.h5
+
+# --- Python & Environments ---
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 venv/
+.venv/
+.env
 
-# Model files
-model/
-*.pt
+# --- Flutter / Dart / Mobile Build Artifacts ---
+/build/
+frontend/build/
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+/android/app/debug
+/android/app/profile
+/android/app/release
+app.*.symbols
+app.*.map.json
 
-# Dataset
-dataset/
+# --- Editors & IDEs ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.history
+*.swp
+*.class
+*.log
 
-# OS files
+# --- OS Specific ---
 .DS_Store
 Thumbs.db
+.atom/
+.svn/
+
+# --- Miscellaneous ---
+.build/
+.buildlog/
+.swiftpm/
+migrate_working_dir/

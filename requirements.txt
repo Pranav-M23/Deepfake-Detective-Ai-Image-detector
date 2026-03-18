@@ -1,27 +1,12 @@
-<<<<<<< HEAD
-# Core API
 fastapi
 uvicorn[standard]
 python-multipart
 
 # ML / vision
-torch
-torchvision
+tensorflow
 pillow
-numpy<2.0
+numpy
 opencv-python
 
 # Utilities
-scipy
 python-dotenv
-=======
-fastapi
-uvicorn[standard]
-python-multipart
-opencv-python
-torch
-torchvision
-pillow
-numpy  
-scipy
->>>>>>> 235e3198f64890e0d6774895a66c2548e93abacd

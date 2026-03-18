@@ -1,8 +1,7 @@
-name: frontend
-description: A new Flutter project.
+name: SusAI
+description: SusAI - AI Media Detector
 
 publish_to: 'none'
-
 version: 1.0.0+1
 
 environment:
@@ -13,6 +12,7 @@ dependencies:
     sdk: flutter
   http: ^1.2.2
   image_picker: ^1.1.2
+  shared_preferences: ^2.2.2
 
 dev_dependencies:
   flutter_test:
