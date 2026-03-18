@@ -3,12 +3,18 @@ dataset.zip
 *.zip
 *.tar.gz
 *.7z
-# Ignore the dataset folder and model weights
+
+# Ignore the dataset folder 
 dataset/
+
+# --- Model Weights Management ---
+# We ignore general weights but SPECIFICALLY allow the production model
 model/
+!model/deepfake_detector.keras
+!model/deepfake_detector.pt
+
 *.pt
 *.bin
-*.h5
 
 # --- Python & Environments ---
 __pycache__/
