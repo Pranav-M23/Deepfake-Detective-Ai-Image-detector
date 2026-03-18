@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Install system dependencies for OpenCV
+# 1. Install system dependencies for OpenCV and Image processing
 RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libsm6 \
@@ -9,18 +9,21 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# 2. Set the working directory to the ROOT of the project
+WORKDIR /usr/src/app
 
-# Copy requirements first for better caching
+# 3. Copy requirements first to leverage Docker layer caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the app
+# 4. Copy the entire project (including the /app folder)
 COPY . .
 
-# Railway provides PORT env variable
+# 5. Set environment variables
 ENV PORT=8000
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
+# 6. Use 'sh -c' to ensure the $PORT variable is injected by Railway
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
